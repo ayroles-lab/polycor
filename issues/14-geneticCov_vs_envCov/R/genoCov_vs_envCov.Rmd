@@ -1,0 +1,270 @@
+---
+title: 'Data simulations: Genetic and Env effects on individual covariance'
+author: "Simon Forsberg"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: null
+  theme: default
+subtitle: Can we distinguish the two?
+keep_md: yes
+---
+
+```{r options, echo = F}
+library(knitr)
+opts_chunk$set(dev = "png", dpi = 192, fig.path = "../figures/", comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T)
+```
+
+I just noticed that a model with iid random slopes seem to pick up on h2.cov just as well as one where $slopes \sim N(0, G\sigma^2_s)$. How is that possible? Likewise, the "genetic random slopes" seem to pick up on non-genetic effects on individual cov as well. My aim here is to see if we can actually distinguish genetic and environmental effects on individual cov. Pardon the messy notation, we can clean that up later.
+
+### Brief summary of simulations
+* n simulated SNPs per individual
+* GRM calculated from SNPs
+* $y1_{ij} = g.add.y1_i + e.y1_{ij}$
+* $y2_{ij} = g.add.y2_i + (g.cov_i + e.cov_i) * y1_{ij} + e.y2_{ij}$
+
+**Where:**
+
+* i = individual, j = observation per individual
+* g.cov = polygenic effect on individual cov(y1, y2)
+  * Effect per SNP: $b.cov \sim N(0, \frac{h^2_{cov}}{n})$
+  * $g.cov = Z*b.cov$, where Z is the scaled genotype matrix
+* e.cov = environmental effect on individual cov(y1, y2)
+  * $e.cov \sim N(0, I\sigma^2_{e,slope})$
+* g.add = additive polygenic effect on y1/y2.
+  * Effect per SNP: $b.add1 \sim N(0, \frac{h^2_{add1}}{n})$, $b.add2 \sim N(0, \frac{h^2_{add2}}{n})$
+  * $g.add = Z*b.add$, where Z is the scaled genotype matrix
+* rhog = Fraction of overlapping causal SNPs
+  * For some subset of SNPs, b.add1 = b.add2
+* e = residual
+  * $e.y1 \sim N(0, 1 - h^2_{add1})$
+  * $e.y2 \sim N(0, 1 - h^2_{add2} - h^2_{cov} - \sigma^2_{e,slope})$
+
+### Models
+For comparison, I'm fitting the following models
+
+#### Model 1
+Both environmental and genetic random slopes:
+
+$y_2 = \mu + b_{g,int} + (\beta + b_{g,slope} + b_{e,slope})*y_1 + e$
+
+**Where:**
+
+* $\mu$ and $\beta$ are fixed effects
+* $b_{g,int} \sim N(0,G\sigma^2_{g,int})$
+* $b_{g,slope} \sim N(0,G\sigma^2_{g,slope})$
+* $b_{e,slope} \sim N(0,I\sigma^2_{e,slope})$
+* $e \sim N(0,I\sigma^2_{e})$
+
+#### Model 2
+Only genetic intercepts and slope. This is the model that we've used previously
+
+$y_2 = \mu + b_{g,int} + (\beta + b_{g,slope})*y_1 + e$
+
+**Where:**
+
+* $\mu$ and $\beta$ are fixed effects
+* $b_{g,int} \sim N(0,G\sigma^2_{g,int})$
+* $b_{g,slope} \sim N(0,G\sigma^2_{g,slope})$
+
+#### Model 3
+Only iid random intercepts and slopes
+
+$y_2 = \mu + b_{e,int} + (\beta + b_{e,slope})*y_1 + e$
+
+**Where:**
+
+* $\mu$ and $\beta$ are fixed effects
+* $b_{e,int} \sim N(0,I\sigma^2_{e,int})$
+* $b_{e,slope} \sim N(0,I\sigma^2_{e,slope})$
+
+### Conclusions
+
+#### Model 1
+This model accurately distinguishes genetic from environmental effects on the individual cov(y1, y2). 
+
+#### Model 2
+In the presence of environmental effects on the individual cov(y1, y2), this model behaves weirdly. It seems to pick up on the genetic effect + some fraction of the environmental effect.
+
+#### Model 3
+Apparently, this guy picks up on G + E effects on cov(y1, y2). So if for instance $h^2_{cov} = 0.3$ and $e_{cov} = 0.3$, this model will tell us 0.6. Isn't that weird? It means that we can capture all of the genetic effects on the individual cov(y1, y2), without actually modelling the genetics. But we can't distinguish genetic from other effects. I guess one implication of this is that we could fit this model as a first step on real data. It's way faster to fit so we could apply it to much larger datasets. If we find a signal, we can dig deeper with Model 1.
+
+Lastly, this works like a charm without repeated observations at just n = 1000! $h^2_{cov}$ is pretty large here. I guess we should also explore how much power we would have for smaller $h^2_{cov}$.
+
+## Include
+
+```{r inc}
+library(tidyverse)
+library(magrittr)
+
+library(Matrix)
+library(MASS)
+
+library(nlme)
+library(lme4)
+
+library(cowplot)
+library(wesanderson)
+library(ggpubr)
+theme_set(theme_cowplot(font_size = 10))
+
+# change to your path here, e.g. based on `nodemame`
+path <- switch(Sys.info()[['nodename']],
+               "~/git/hemostat/polycor/", 'gen-sflaptop' = '/media/sf9/ExtraDrive1/Dropbox/Research_170228/covQTL/bin/polycor/',
+               'gen-comp1.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor',
+               'gen-comp2.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor')
+
+src <- file.path(path, "modelFitting.R")
+source(src)
+
+src <- file.path(path, "simFunctions.R")
+source(src)
+
+src <- file.path(path, "plotFunctions.R")
+source(src)
+```
+
+## Parameters
+These parameters are common to all the simulations
+
+```{r par}
+testing <- F
+
+n_loci <- 200
+nrPops <- 10
+Fst <- .3
+models <- c("slopeG_add_12", "slopeGandE_add_12", "slopeE_add_12")
+
+#Sample sizes and number of simulations
+nrep <- 1
+vals_n <- 1000
+vals_sim <- 1:3
+
+if(testing) {
+  nrep <- 1
+  vals_n <- 100
+  vals_sim <- 1:2
+}
+```
+
+
+# Simulation 1: $h^2_{cov} + \sigma^2_{e,slope}$
+
+```{r sim1, cache = T}
+#Parameters
+h2_cov <- c(0, 0.3, 0.45)
+h2_add_t1 <- 0
+h2_add_t2 <- 1e-4
+e_cov <- c(0, 0.3, 0.45)
+rhog <- 0
+resFile <- '../results/sim1.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, e_cov = e_cov)
+  SimRes <- data.frame(grid, runtime_slope_G = NA, runtime_slope_GI = NA, runtime_slope_I = NA, 
+                       h2.add.t2_slopeMod_GI = NA, 
+                       h2.cov_slopeMod_GI = NA, 
+                       e.cov_slopeMod_GI = NA,
+                       h2.add.t2_slopeMod_G = NA, 
+                       h2.cov_slopeMod_G = NA, 
+                       icc.t2_slopeMod_I = NA, 
+                       e.cov_slopeMod_I = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.cov <- grid$h2_cov[i]
+    e.cov <- grid$e_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2_add_t2,
+                                               h2.cov = h2.cov, rhog = rhog, e.cov = e.cov,
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G)
+    
+    #Store results
+    SimRes$runtime_slope_G[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slopeG_add_12']
+    SimRes$runtime_slope_GI[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$runtime_slope_I[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slopeE_add_12']
+    SimRes$h2.add.t2_slopeMod_GI[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$h2.cov_slopeMod_GI[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$e.cov_slopeMod_GI[i] <- simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$h2.add.t2_slopeMod_G[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeG_add_12']
+    SimRes$h2.cov_slopeMod_G[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeG_add_12']
+    SimRes$icc.t2_slopeMod_I[i] <- simdat.modFit$icc.t2[simdat.modFit$model == 'slopeE_add_12']
+    SimRes$e.cov_slopeMod_I[i] <- simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeE_add_12']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+## Results
+* x-axis = $h^2_{cov}$ true
+* y-axis = estimates of $h^2_{cov}$ and $e_{cov}$ from the different models
+
+```{r plot_h2cov, echo = F, cache = T}
+incl <- SimRes$n == vals_n[1] & SimRes$e_cov == e_cov[1]
+SimRes.long <- pivot_longer(SimRes[incl,], cols = contains('.cov'))
+g_1 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+    geom_boxplot() +
+    theme(legend.title=element_text(size=30, face = 'bold'), 
+          legend.text=element_text(size=10), 
+          axis.text=element_text(size=10),
+          axis.title=element_text(size=10),
+          plot.title = element_text(hjust = 0.5, size = 10),
+          plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+    ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+    guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+    ggtitle(bquote(e[cov] ~ '=' ~ .(e_cov[1]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+  
+incl <- SimRes$n == vals_n[1] & SimRes$e_cov == e_cov[2]
+SimRes.long <- pivot_longer(SimRes[incl,], cols = contains('.cov'))
+g_2 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+    geom_boxplot() +
+    theme(legend.title=element_text(size=30, face = 'bold'), 
+          legend.text=element_text(size=10), 
+          axis.text=element_text(size=10),
+          axis.title=element_text(size=10),
+          plot.title = element_text(hjust = 0.5, size = 10),
+          plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+    ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+    guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+    ggtitle(bquote(e[cov] ~ '=' ~ .(e_cov[2]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+
+incl <- SimRes$n == vals_n[1] & SimRes$e_cov == e_cov[3]
+SimRes.long <- pivot_longer(SimRes[incl,], cols = contains('.cov'))
+g_3 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+    geom_boxplot() +
+    theme(legend.title=element_text(size=30, face = 'bold'), 
+          legend.text=element_text(size=10), 
+          axis.text=element_text(size=10),
+          axis.title=element_text(size=10),
+          plot.title = element_text(hjust = 0.5, size = 10),
+          plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+    ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+    guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+    ggtitle(bquote(e[cov] ~ '=' ~ .(e_cov[3]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+
+legend <- cowplot::get_legend(g_1)
+ggarrange(g_1 + theme(legend.position = "none"), 
+          g_2 + theme(legend.position = "none"), 
+          g_3 + theme(legend.position = "none"),
+          legend)
+```
+
+
+# Runtime
+```{r plot_runtime, echo = F, cache = T}
+boxplot(SimRes$runtime_slope_GI, SimRes$runtime_slope_G, SimRes$runtime_slope_I, xaxt = 'n', ylab = '')
+axis(side = 1, at = 1:3, labels = c('Model 1 (GE)', 'Model 2 (G)', 'Model 3 (E)'), cex.axis = 1.5)
+mtext('Minutes', side = 2, cex = 2, line = 2)
+```

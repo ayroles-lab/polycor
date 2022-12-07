@@ -1,0 +1,101 @@
+---
+title: "Testing relmer function"
+author: "Andrey Ziyatdinov"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: united
+    toc: true
+    number_sections: true
+    keep_md: true
+---
+
+```{r options, echo = F}
+opts_chunk$set(dpi = 92,
+  fig.path = "figures/", fcacheig.path = "cache/",
+  comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T, cache = F)
+```
+
+```{r inc_hidden, echo = F}
+library(pander)
+panderOptions('table.continues', '')
+panderOptions('big.mark', ',')
+panderOptions('table.alignment.default', 'left')
+```
+
+```{r inc}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+
+library(MASS)
+
+library(Matrix)
+library(lme4)
+
+library(lme4qtl)
+library(solarius)
+```
+
+# Load `relmer` function
+
+```{r source}
+# change to your path here, e.g. based on `nodemame`
+path <- switch(Sys.info()[['nodename']],
+  "~/git/hemostat/polycor/" )
+  
+src <- file.path(path, "relmer.R")
+source(src)
+```
+
+# Test model fitting on examples
+
+## `sleepstudy`: lme4 vs relmer
+
+```{r sleepstudy, cache = T}
+m1 <- lme4::lmer(Reaction ~ Days + (Days | Subject), sleepstudy)
+(m2 <- relmer(Reaction ~ Days + (Days | Subject), sleepstudy))
+
+stopifnot(all.equal(logLik(m1), logLik(m2)))
+stopifnot(all.equal(fixef(m1), fixef(m2)))
+```
+
+## Univariate polygenic: lme4qtl vs relmer
+
+```{r dat40, cache = T}
+data(dat40)
+
+m1 <- lme4qtl::relmatLmer(trait1 ~ AGE + SEX + (1|ID), dat40, relmat = list(ID = kin2))
+(m2 <- relmer(trait1 ~ AGE + SEX + (1|ID), dat40, relmat = list(ID = kin2)))
+
+stopifnot(all.equal(logLik(m1), logLik(m2)))
+stopifnot(all.equal(fixef(m1), fixef(m2)))
+```
+
+## Univariate sex-specifc polygenic: lme4qtl vs relmer
+
+```{r sex-spec, cache = T}
+data(dat40)
+
+m1 <- lme4qtl::relmatLmer(trait1 ~ AGE + SEX + (1|ID), dat40, relmat = list(ID = kin2))
+(m2 <- relmer(trait1 ~ AGE + SEX + (1|ID), dat40, relmat = list(ID = kin2)))
+
+stopifnot(all.equal(logLik(m1), logLik(m2)))
+stopifnot(all.equal(fixef(m1), fixef(m2)))
+```
+
+## Bivariate polygenic: solarius vs relmer
+
+```{r bivar, cache = T}
+data(dat40)
+# no missing data is a current requirement of `relmer` for nested model
+#dat <- na.omit(dat40)
+bdat <- within(dat, RID <- ID)
+bdat <- tidyr::gather(bdat, tname, trait, trait1, trait2)
+wts <- rep(1e10, nrow(bdat))
+
+(m1 <- solarius::solarPolygenic(trait1 + trait2 ~ 1, dat40))
+(m2 <- relmer(trait ~ (0 + tname|ID) + (0 + dummy(tname)|RID), bdat, relmat = list(ID = kin2)))
+(m3 <- relmer(trait ~ (0 + tname|ID) + (0 + tname|RID), bdat, weights = wts, relmat = list(ID = kin2), calc.derivs = FALSE))
+```
+

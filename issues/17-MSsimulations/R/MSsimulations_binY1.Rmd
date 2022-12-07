@@ -1,0 +1,461 @@
+---
+title: 'Simulations for the MS'
+author: "Simon Forsberg"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  theme: default
+subtitle: Binary $y_1$
+keep_md: yes
+urlcolor: blue
+---
+
+```{r options, echo = F}
+library(knitr)
+opts_chunk$set(dev = "png", dpi = 192, fig.path = "../figures/", comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T)
+```
+
+For the MS, we need to simulate across more of the parameter space, and do more runs per parameter value. So this should be a more extensive version of what we've already done.  
+
+I think we'll have to parallelize:
+~5 min per iteration at n=1000, fitting both bivar and slopeGE => ~5d running 30 threads for simulation 1
+
+## Generative model in simulations
+
+$y_1 = G*g_{add1} + e_1$
+
+It is then discretized by simply dividing the range of $y_1$ into two pieces of equal length, coded as 0,1 (`as.numeric(cut(y1, breaks = 2)) - 1`)
+
+$y_2 = G*g_{add2} + (G*g_{cov} + e_{cov})*y_1 + e_2$
+
+**Where:**
+
+* G is the genotype matrix
+* $g_{add1} \sim N(0, h^2_{add1}/n_{loci})$ is the per SNP additive effect on y1
+* $g_{add2} \sim N(0, h^2_{add2}/n_{loci})$ is the per SNP additive effect on y2
+* $g_{cov} \sim N(0, h^2_{cov}/n_{loci})$ is the per SNP effect on the slope
+* $e_{cov} \sim N(0, \sigma^2_{cov})$ is the per individual environmental effect on the slope
+* $e_1 \sim N(0, 1 - h^2_{add1})$
+* $e_2 \sim N(0, 1 - h^2_{add2} - h^2_{cov} - \sigma^2_{cov})$
+* $r_g$ describes the fraction of g_add1 and g_add2 that are the same, eg pleiotropy. ($r_g = 0$ here)
+
+For binary $y_1$, it is discretized by simply dividing the range of $y_1$ into two pieces of equal length, coded as 0,1 (`as.numeric(cut(y1, breaks = 2)) - 1`)
+
+## Estimated Model
+
+#### GE random slope model
+Both environmental and genetic random slopes:
+
+$y_2 = \mu + b_{g,int} + (\beta + b_{g,slope} + b_{e,slope})*y_1 + e$
+
+**Where:**
+
+* $\mu$ and $\beta$ are fixed effects
+* $b_{g,int} \sim N(0,K\sigma^2_{g,int})$
+* $b_{g,slope} \sim N(0,K\sigma^2_{g,slope})$
+* $b_{e,slope} \sim N(0,I\sigma^2_{e,slope})$
+* $e \sim N(0,I\sigma^2_{e})$
+* K is the kinship matrix, estimated from G
+
+## Include
+
+```{r inc}
+library(ggpubr)
+library(dplyr)
+library(foreach)
+library(doSNOW)
+models <- c("slopeGandE_add_12", "bivar", "gxemm_giid_eiid")
+testing <- T
+
+# Assumes either Simons laptop or the Princeton gencomp server. Otherwise, modify to your path. NOTE: GxEMM (because of ldak5.linux) will only work on linux
+path <- switch(Sys.info()[['sysname']],
+               'Darwin' = "~/Documents/GitHub/polycor", 
+               'Linux' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor')
+
+src <- file.path(path, "modelFitting.R")
+source(src)
+
+src <- file.path(path, "simFunctions.R")
+source(src)
+
+src <- file.path(path, "plotFunctions.R")
+source(src)
+
+ldak_loc  <- file.path(path, "../gxemm/ldak5.linux")
+```
+
+
+# Simulation 1: Binary $y_1$, n = 1000 with no repeated observations, unstratified population
+```{r sim1, cache = T, eval=F}
+
+### Parameters ###
+if(testing){
+  nThreads <- 5
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 1       #n observations
+  vals_n <- 200  #N Individuals
+  vals_sim <- 1:2 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- c(0, .4)
+  h2_add_t1 <- .4
+  h2_add_t2 <- .2
+  e_cov <- .2
+  rhog <- .5
+}else{
+  nThreads <- 29
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 1       #n observations
+  vals_n <- 1000  #N Individuals
+  vals_sim <- 1:50 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- seq(0, .8, by = .2)
+  h2_add_t1 <- seq(0, .8, by = .2)
+  h2_add_t2 <- seq(0, .8, by = .2)
+  e_cov <- seq(0, .8, by = .2)
+  rhog <- seq(0, .8, by = .2)
+}
+
+resFile <- '../results/sim1_binY1.RData'
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, e_cov = e_cov)
+  grid <- grid[grid$h2_cov + grid$h2_add_t2 + grid$e_cov < 1, ]
+  
+  ### Run simulations and fit models in parallel ###
+  cl <- makeCluster(nThreads)
+  registerDoSNOW(cl)
+  SimRes.list <- foreach(i = 1:nrow(grid), .errorhandling = 'remove') %dopar% { #Occasionally, gxemm in different threads tries to write to the same tmpdir => error. .errorhandling = 'remove' is a quick fix for this
+    library(tidyverse)
+    library(lme4)
+    library(lme4qtl)
+    library(GxEMM)
+    
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2_cov <- grid$h2_cov[i]
+    h2_add_t1 <- grid$h2_add_t1[i]
+    h2_add_t2 <- grid$h2_add_t2[i]
+    e_cov <- grid$e_cov[i]
+    rhog <- grid$rhog[i]
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2_add_t2,
+                                               h2.cov = h2_cov, rhog = rhog, e.cov = e_cov,
+                                               postproc = T, trait1.binary = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G, ldak_loc = ldak_loc)
+    
+    #Return results
+    res <- c(unlist(grid[i,]), 
+             'runtime_bivar' = simdat.modFit$runtime[simdat.modFit$model == 'bivar'],
+             'h2add_t1_bivar' = simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar'],
+             'h2add_t2_bivar' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar'],
+             'rhog_bivar' = simdat.modFit$rhog[simdat.modFit$model == 'bivar'],
+             'runtime_slopeGE' = simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2add_t2_slopeGE' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2cov_slopeGE' = simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'Ecov_slopeGE' = simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'runtime_gxemm' = simdat.modFit$runtime[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2hom_gxemm' = simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2het_gxemm' = simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'])
+    return(res)
+  }
+  stopCluster(cl)
+  
+  #Reformat and save
+  SimRes <- bind_rows(SimRes.list)
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+# Simulation 2: Binary $y_1$, n = 500 with two repeated observations, unstratified population
+```{r sim2, cache = T, eval=F}
+
+### Parameters ###
+if(testing){
+  nThreads <- 5
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 1       #n observations
+  vals_n <- 200   #N Individuals
+  vals_sim <- 1:2 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- c(0, .4)
+  h2_add_t1 <- .4
+  h2_add_t2 <- .2
+  e_cov <- .2
+  rhog <- .5
+}else{
+  nThreads <- 29
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 2       #n observations
+  vals_n <- 500  #N Individuals
+  vals_sim <- 1:50 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- seq(0, .8, by = .2)
+  h2_add_t1 <- seq(0, .8, by = .2)
+  h2_add_t2 <- seq(0, .8, by = .2)
+  e_cov <- seq(0, .8, by = .2)
+  rhog <- seq(0, .8, by = .2)
+}
+
+resFile <- '../results/sim2_binY1.RData'
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, e_cov = e_cov)
+  grid <- grid[grid$h2_cov + grid$h2_add_t2 + grid$e_cov < 1, ]
+  
+  ### Run simulations and fit models in parallel ###
+  cl <- makeCluster(nThreads)
+  registerDoSNOW(cl)
+  SimRes.list <- foreach(i = 1:nrow(grid), .errorhandling = 'remove') %dopar% { 
+    library(tidyverse)
+    library(lme4)
+    library(lme4qtl)
+    library(GxEMM)
+    
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2_cov <- grid$h2_cov[i]
+    h2_add_t1 <- grid$h2_add_t1[i]
+    h2_add_t2 <- grid$h2_add_t2[i]
+    e_cov <- grid$e_cov[i]
+    rhog <- grid$rhog[i]
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2_add_t2,
+                                               h2.cov = h2_cov, rhog = rhog, e.cov = e_cov,
+                                               postproc = T, trait1.binary = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G, ldak_loc = ldak_loc)
+    
+    #Return results
+    res <- c(unlist(grid[i,]), 
+             'runtime_bivar' = simdat.modFit$runtime[simdat.modFit$model == 'bivar'],
+             'h2add_t1_bivar' = simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar'],
+             'h2add_t2_bivar' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar'],
+             'rhog_bivar' = simdat.modFit$rhog[simdat.modFit$model == 'bivar'],
+             'runtime_slopeGE' = simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2add_t2_slopeGE' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2cov_slopeGE' = simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'Ecov_slopeGE' = simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'runtime_gxemm' = simdat.modFit$runtime[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2hom_gxemm' = simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2het_gxemm' = simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'])
+    return(res)
+  }
+  stopCluster(cl)
+  
+  #Reformat and save
+  SimRes <- bind_rows(SimRes.list)
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+# Simulation 3: Binary $y_1$, n = 333 with three repeated observations, unstratified population
+```{r sim3, cache = T, eval=F}
+
+### Parameters ###
+if(testing){
+  nThreads <- 5
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 1       #n observations
+  vals_n <- 200  #N Individuals
+  vals_sim <- 1:2 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- c(0, .4)
+  h2_add_t1 <- .4
+  h2_add_t2 <- .2
+  e_cov <- .2
+  rhog <- .5
+}else{
+  nThreads <- 29
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 3       #n observations
+  vals_n <- 333  #N Individuals
+  vals_sim <- 1:50 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- seq(0, .8, by = .2)
+  h2_add_t1 <- seq(0, .8, by = .2)
+  h2_add_t2 <- seq(0, .8, by = .2)
+  e_cov <- seq(0, .8, by = .2)
+  rhog <- seq(0, .8, by = .2)
+}
+
+resFile <- '../results/sim3_binY1.RData'
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, e_cov = e_cov)
+  grid <- grid[grid$h2_cov + grid$h2_add_t2 + grid$e_cov < 1, ]
+  
+  ### Run simulations and fit models in parallel ###
+  cl <- makeCluster(nThreads)
+  registerDoSNOW(cl)
+  SimRes.list <- foreach(i = 1:nrow(grid), .errorhandling = 'remove') %dopar% { 
+    library(tidyverse)
+    library(lme4)
+    library(lme4qtl)
+    library(GxEMM)
+    
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2_cov <- grid$h2_cov[i]
+    h2_add_t1 <- grid$h2_add_t1[i]
+    h2_add_t2 <- grid$h2_add_t2[i]
+    e_cov <- grid$e_cov[i]
+    rhog <- grid$rhog[i]
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2_add_t2,
+                                               h2.cov = h2_cov, rhog = rhog, e.cov = e_cov,
+                                               postproc = T, trait1.binary = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G, ldak_loc = ldak_loc)
+    
+    #Return results
+    res <- c(unlist(grid[i,]), 
+             'runtime_bivar' = simdat.modFit$runtime[simdat.modFit$model == 'bivar'],
+             'h2add_t1_bivar' = simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar'],
+             'h2add_t2_bivar' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar'],
+             'rhog_bivar' = simdat.modFit$rhog[simdat.modFit$model == 'bivar'],
+             'runtime_slopeGE' = simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2add_t2_slopeGE' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2cov_slopeGE' = simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'Ecov_slopeGE' = simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'runtime_gxemm' = simdat.modFit$runtime[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2hom_gxemm' = simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2het_gxemm' = simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'])
+    return(res)
+  }
+  stopCluster(cl)
+  
+  #Reformat and save
+  SimRes <- bind_rows(SimRes.list)
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+# Simulation 4: Binary $y_1$, n = 250 with four repeated observations, unstratified population
+```{r sim4, cache = T, eval=F}
+
+### Parameters ###
+if(testing){
+  nThreads <- 5
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 1       #n observations
+  vals_n <- 200  #N Individuals
+  vals_sim <- 1:2 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- c(0, .4)
+  h2_add_t1 <- .4
+  h2_add_t2 <- .2
+  e_cov <- .2
+  rhog <- .5
+}else{
+  nThreads <- 29
+
+  n_loci <- 400 #number of loci
+  
+  #Sample sizes and number of simulations
+  nrep <- 4       #n observations
+  vals_n <- 250   #N Individuals
+  vals_sim <- 1:50 #Simulations per parameter combination
+  
+  #Variances etc
+  h2_cov <- seq(0, .8, by = .2)
+  h2_add_t1 <- seq(0, .8, by = .2)
+  h2_add_t2 <- seq(0, .8, by = .2)
+  e_cov <- seq(0, .8, by = .2)
+  rhog <- seq(0, .8, by = .2)
+}
+
+resFile <- '../results/sim4_binY1.RData'
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, e_cov = e_cov)
+  grid <- grid[grid$h2_cov + grid$h2_add_t2 + grid$e_cov < 1, ]
+  
+  ### Run simulations and fit models in parallel ###
+  cl <- makeCluster(nThreads)
+  registerDoSNOW(cl)
+  SimRes.list <- foreach(i = 1:nrow(grid), .errorhandling = 'remove') %dopar% { 
+    library(tidyverse)
+    library(lme4)
+    library(lme4qtl)
+    library(GxEMM)
+    
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2_cov <- grid$h2_cov[i]
+    h2_add_t1 <- grid$h2_add_t1[i]
+    h2_add_t2 <- grid$h2_add_t2[i]
+    e_cov <- grid$e_cov[i]
+    rhog <- grid$rhog[i]
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2_add_t2,
+                                               h2.cov = h2_cov, rhog = rhog, e.cov = e_cov,
+                                               postproc = T, trait1.binary = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G, ldak_loc = ldak_loc)
+    
+    #Return results
+    res <- c(unlist(grid[i,]), 
+             'runtime_bivar' = simdat.modFit$runtime[simdat.modFit$model == 'bivar'],
+             'h2add_t1_bivar' = simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar'],
+             'h2add_t2_bivar' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar'],
+             'rhog_bivar' = simdat.modFit$rhog[simdat.modFit$model == 'bivar'],
+             'runtime_slopeGE' = simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2add_t2_slopeGE' = simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12'],
+             'h2cov_slopeGE' = simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'Ecov_slopeGE' = simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12'],
+             'runtime_gxemm' = simdat.modFit$runtime[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2hom_gxemm' = simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'],
+             'h2het_gxemm' = simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_giid_eiid'])
+    return(res)
+  }
+  stopCluster(cl)
+  
+  #Reformat and save
+  SimRes <- bind_rows(SimRes.list)
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  

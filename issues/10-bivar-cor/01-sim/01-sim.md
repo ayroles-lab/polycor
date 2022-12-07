@@ -1,0 +1,285 @@
+---
+title: "Data simulations: pleiotropy + individual-level correlations"
+author: "Andrey Ziyatdinov"
+date: "2019-02-11"
+output:
+  html_document:
+    theme: united
+    toc: true
+    keep_md: true
+---
+
+
+
+# Include
+
+
+```r
+library(tidyverse)
+library(magrittr)
+
+library(Matrix)
+library(MASS)
+
+library(nlme)
+library(lme4)
+
+library(ggplot2)
+library(cowplot)
+theme_set(theme_cowplot(font_size = 10))
+
+# change to your path here, e.g. based on `nodemame`
+path <- switch(Sys.info()[['nodename']],
+  "~/git/hemostat/polycor/", 'gen-sflaptop' = '/media/sf9/ExtraDrive1/Dropbox/Research_170228/covQTL/bin/polycor/')
+  
+src <- file.path(path, "relmer.R")
+source(src)
+
+src <- file.path(path, "simFunctions.R")
+source(src)
+```
+
+# Parameters
+
+
+```r
+testing <- FALSE
+
+h2_cov <- 0.3
+h2_add <- 0.3
+vals_h2_t1 <- c(1e-4, 0.1, 0.2, 0.3)
+rhog <- 0.5
+
+nrep <- 10
+vals_n <- 5 * c(100, 500, 1e3) / nrep
+vals_sim <- 1:5
+
+if(testing) {
+  nrep <- 2
+  vals_n <- c(10, 50) / nrep
+  vals_sim <- 1:2
+}
+```
+
+# Functions
+
+
+```r
+run_models <- function(models, dat, G)
+{
+  lapply(models, function(model) {
+    tab <- switch(model,
+      "bivar" = {
+        bdat <- gather(dat, tname, tvalue, trait1, trait2)
+          mod <- relmer(tvalue ~ -1 + tname + (0 + tname | id) + (0 + tname | rid), 
+            data = bdat, relmat = list(id = G), calc.derivs = FALSE)
+          
+          # cov <- VarProp(mod) %>% as.data.frame %>% 
+          #   filter(grp == "id" & var1 == "tnametrait1" & var2 == "tnametrait2") %$% prop
+          vf <- VarProp(mod) %>% as.data.frame %>% filter(grp == "id")
+          cov <- filter(vf, grp == "id" & var1 == "tnametrait1" & var2 == "tnametrait2") %$% vcov
+          rhog <- cov / sqrt(vf$vcov[1]*vf$vcov[2])
+
+          add <- VarProp(mod) %>% as.data.frame %>% 
+            filter(grp == "id" & var1 == "tnametrait2" & is.na(var2)) %$% prop
+                    
+          # data_frame(cov = cov, add = add)
+          data_frame(rhog = rhog, add = add)
+      },
+      "slope_add" = {
+          mod <- relmer(trait2 ~ (1|rid) + (0 + trait1|id), data = dat, 
+            relmat = list(id = G, rid = G))
+        
+          cov <- VarProp(mod) %>% as.data.frame %>% filter(grp == "id") %$% prop
+          add <- VarProp(mod) %>% as.data.frame %>% filter(grp == "rid") %$% prop
+          
+          data_frame(cov = cov, add = add)
+      },
+      stop("error in switch: unknown `model`"))
+        
+    mutate(tab, model = model)
+  }) %>% bind_rows
+}
+```
+
+# Simulation 1: h2.cov + h2.add
+
+| Data Simulation | Bi-variate Model | Random-slope Model |
+|--|--|--|
+| Random-slope (h2.cov = 0.3; h2.add = 0.3) | v | v |
+
+
+```r
+grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim) %>%
+  as_tibble
+
+tab <- lapply(seq(nrow(grid)), function(i)
+{
+  n <- grid$n[i]
+  sim <- grid$sim[i]
+  
+  message(" -", i, "/", nrow(grid), "\n")
+  
+  simdat <- genBivarCov.simulatePairKin(n_ind = n, n_perInd = nrep, 
+    h2.cov = h2_cov, h2.add = h2_add,
+    h2.add.t1 = 1e-4, rhog = 0,
+    postproc = TRUE)
+
+  dat <- simdat$pheno %>% as_tibble
+  G <- simdat$G
+  
+  models <- c("bivar", "slope_add")
+  run_models(models, dat, G) %>%
+    mutate(
+      true_cov = h2_cov, true_add = h2_add,
+      n = n, nrep = nrep)
+}) %>% bind_rows %>%
+  mutate(N = factor(n, levels = unique(n), labels = unique(paste0("N = ", n, " x ", nrep))))
+```
+
+![](figures/pltot_sim1-1.png)<!-- -->
+
+# Simulation 2: h2.cov + h2.add + h2.add.t1
+
+| Data Simulation | Bi-variate Model | Random-slope Model |
+|--|--|--|
+| Random-slope (h2.cov = 0.3; h2.add = 0.3; h2.add.t1) | v | v |
+
+
+```r
+grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim,
+  h2.add.t1 = vals_h2_t1) %>%
+  as_tibble
+
+tab <- lapply(seq(nrow(grid)), function(i)
+{
+  n <- grid$n[i]
+  sim <- grid$sim[i]
+  h2_add_t1 <- grid$h2.add.t1[i]
+  
+  message(" -", i, "/", nrow(grid), "\n")
+  
+  simdat <- genBivarCov.simulatePairKin(n_ind = n, n_perInd = nrep, 
+    h2.cov = h2_cov, h2.add = h2_add,
+    h2.add.t1 = h2_add_t1, rhog = 0,
+    postproc = TRUE)
+
+  dat <- simdat$pheno %>% as_tibble
+  G <- simdat$G
+  
+  models <- c("bivar", "slope_add")
+  run_models(models, dat, G) %>%
+    mutate(
+      true_cov = h2_cov, true_add = h2_add, true_h2_add_t1 = h2_add_t1,
+      n = n, nrep = nrep)
+}) %>% bind_rows %>%
+  mutate(N = factor(n, levels = unique(n), labels = unique(paste0("N = ", n, " x ", nrep))))
+```
+
+![](figures/pltot_sim2-1.png)<!-- -->
+
+# Simulation 3: h2.cov + h2.add + h2.add.t1 + rhog
+
+| Data Simulation | Bi-variate Model | Random-slope Model |
+|--|--|--|
+| Random-slope (h2.cov = 0.3; h2.add = 0.3; h2.add.t1; rhog = 0.5) | v | upward bias (when #repeats is low) |
+
+NOTE: the upward bias is noticable when the number of repeats is 4. On the figure below, the number of repeats is 10, and the bias is small. 
+
+TODO: We might try a different data-simulation model, where `cor(t1, t2)` is afected by only the genetic additive part of `t1` rather than additive+bi-variate.
+
+Data simulation in Simulation 3:
+
+```
+trait1 ~ g.add.t1 + g.bivar + e.t1
+trait2 ~ g.cov * trait1 + g.add.t2 + g.bivar + e.t2
+```
+
+An updated data simulation model:
+
+```
+trait1 ~ g.add.t1 + g.bivar + e.t1
+trait2 ~ g.cov * [g.add.t1 + e.t1] + g.add.t2 + g.bivar + e.t2
+```
+
+
+```r
+grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim,
+  h2.add.t1 = vals_h2_t1) %>%
+  as_tibble
+
+tab <- lapply(seq(nrow(grid)), function(i)
+{
+  n <- grid$n[i]
+  sim <- grid$sim[i]
+  h2_add_t1 <- grid$h2.add.t1[i]
+  
+  message(" -", i, "/", nrow(grid), "\n")
+  
+  simdat <- genBivarCov.simulatePairKin(n_ind = n, n_perInd = nrep, 
+    h2.cov = h2_cov, h2.add = h2_add,
+    h2.add.t1 = h2_add_t1, rhog = rhog,
+    postproc = TRUE)
+
+  dat <- simdat$pheno %>% as_tibble
+  G <- simdat$G
+  
+  models <- c("bivar", "slope_add")
+  run_models(models, dat, G) %>%
+    mutate(
+      true_cov = 1e-4, true_add = h2_add, true_h2_add_t1 = h2_add_t1,
+      n = n, nrep = nrep)
+}) %>% bind_rows %>%
+  mutate(N = factor(n, levels = unique(n), labels = unique(paste0("N = ", n, " x ", nrep))))
+```
+
+![](figures/pltot_sim3-1.png)<!-- -->
+
+# Simulation 4: bi-variate h2.add + h2.add.t1 + rhog
+
+| Data Simulation | Bi-variate Model | Random-slope Model |
+|--|--|--|
+| Random-slope (h2.add = 0.3; h2.add.t1; rhog = 0.9) | v | v |
+
+TODO: to check what kind of variance in estimated by uni- and bi-variate model (under bi-variate model simulation). It seems that
+
+- bi-variate model (including random-slope model) picks up `g.add.t2` 
+- uni-variate model picks up `g.add.t2 + g.bivar`
+
+```
+trait1 ~ g.add.t1 + g.bivar + e.t1
+trait2 ~ g.cov * trait1 + g.add.t2 + g.bivar + e.t2
+```
+
+
+```r
+grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim,
+  h2.add.t1 = vals_h2_t1) %>%
+  as_tibble
+
+tab <- lapply(seq(nrow(grid)), function(i)
+{
+  n <- grid$n[i]
+  sim <- grid$sim[i]
+  h2_add_t1 <- grid$h2.add.t1[i]
+  
+  message(" -", i, "/", nrow(grid), "\n")
+  
+  simdat <- genBivarCov.simulatePairKin(n_ind = n, n_perInd = nrep, 
+    h2.cov = 1e-4, h2.add = h2_add,
+    h2.add.t1 = h2_add_t1, rhog = 0.9,
+    postproc = TRUE)
+
+  dat <- simdat$pheno %>% as_tibble
+  G <- simdat$G
+  
+  models <- c("bivar", "slope_add")
+  run_models(models, dat, G) %>%
+    mutate(
+      true_cov = h2_cov, true_add = h2_add, true_h2_add_t1 = h2_add_t1,
+      n = n, nrep = nrep)
+}) %>% bind_rows %>%
+  mutate(N = factor(n, levels = unique(n), labels = unique(paste0("N = ", n, " x ", nrep))))
+```
+
+![](figures/pltot_sim4-1.png)<!-- -->

@@ -1,0 +1,555 @@
+---
+title: "Data simulations: pleiotropy + individual-level correlations. Genotype based. No repeated observations"
+author: "Simon Forsberg"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: default
+    toc: true
+    keep_md: true
+---
+
+
+```{r options, echo = F}
+library(knitr)
+opts_chunk$set(dev = "png", dpi = 192, fig.path = "../figures/genoSim_n1perInd/", comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T)
+```
+
+Simulations based on actual genotypes in outbred but stratified populations. Same thing as previous genotype based simulations (polycor/issues/13-post-ASHG/R/genotypeSimulations_currentLme4qtl.Rmd) but with no repeated observations per individual. Instead, these simulations include more individuals.
+
+## Include
+
+```{r inc}
+library(tidyverse)
+library(magrittr)
+
+library(Matrix)
+library(MASS)
+
+library(nlme)
+library(lme4)
+
+library(cowplot)
+library(wesanderson)
+theme_set(theme_cowplot(font_size = 10))
+
+# change to your path here, e.g. based on `nodemame`
+path <- switch(Sys.info()[['nodename']],
+               "~/git/hemostat/polycor/", 'gen-sflaptop' = '/media/sf9/ExtraDrive1/Dropbox/Research_170228/covQTL/bin/polycor/',
+               'gen-comp1.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor',
+               'gen-comp2.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor')
+
+src <- file.path(path, "modelFitting.R")
+source(src)
+
+src <- file.path(path, "simFunctions.R")
+source(src)
+
+src <- file.path(path, "plotFunctions.R")
+source(src)
+```
+
+## Parameters
+These parameters are common to all the simulations
+
+```{r par}
+testing <- T
+
+n_loci <- 200
+nrPops <- 10
+Fst <- .3
+models <- c("bivar", "slope_add_12")
+
+#Sample sizes and number of simulations
+nrep <- 1
+vals_n <- c(5000, 10000)
+vals_sim <- 1:3
+
+if(testing) {
+  nrep <- 1
+  vals_n <- c(20, 40)
+  vals_sim <- 1:2
+}
+```
+
+
+# Simulation 1: h2.cov + h2.add.t2
+
+```{r sim1, cache = T}
+#Parameters
+h2_cov <- c(0.3, 0.6)
+h2_add_t1 <- 0
+h2_add_t2 <- c(1e-4, 0.1, 0.2, 0.3)
+rhog <- 0
+resFile <- '../results/genoSim_n1perInd/sim1.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog)
+  SimRes <- data.frame(grid, runtime_slope = NA, runtime_bivar = NA,
+                       h2.add.t2_slopeMod = NA, 
+                       h2.add.t1_bivar = NA, h2.add.t2_bivar = NA,
+                       h2.cov_slopeMod = NA, rhog_bivar = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.add.t2 <- grid$h2_add_t2[i]
+    h2.cov <- grid$h2_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2.add.t2,
+                                               h2.cov = h2.cov, rhog = rhog, 
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G)
+
+    #Store results
+    SimRes$h2.add.t2_slopeMod[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slope_add_12']
+    SimRes$h2.add.t1_bivar[i] <- simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar']
+    SimRes$h2.add.t2_bivar[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar']
+    SimRes$h2.cov_slopeMod[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slope_add_12']
+    SimRes$rhog_bivar[i] <- simdat.modFit$rhog[simdat.modFit$model == 'bivar']
+    SimRes$runtime_slope[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slope_add_12']
+    SimRes$runtime_bivar[i] <- simdat.modFit$runtime[simdat.modFit$model == 'bivar']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+## h2.add.t2
+* x-axis = h2.add.t2 true
+* y-axis = h2.add.t2 estimated
+
+```{r plot_sim1_addT2, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+```
+
+## h2.cov & rhog
+* x-axis = h2.add.t2 true
+* y-axis = h2.cov (slope_add model), rhog (bivar model)
+
+Dashed lines indicate simulated values for h2.cov and rhog
+```{r plot_sim1_h2cov_rhog, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('slope_add    n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+```
+
+
+
+# Simulation 2: h2.cov + h2.add.t1 + h2.add.t2
+
+```{r sim2, cache = T}
+#Parameters
+h2_cov <- c(0.3, 0.6)
+h2_add_t1 <- .3
+h2_add_t2 <- c(1e-4, 0.1, 0.2, 0.3)
+rhog <- 0
+resFile <- '../results/genoSim_n1perInd/sim2.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog)
+  SimRes <- data.frame(grid, runtime_slope = NA, runtime_bivar = NA,
+                       h2.add.t2_slopeMod = NA, 
+                       h2.add.t1_bivar = NA, h2.add.t2_bivar = NA,
+                       h2.cov_slopeMod = NA, rhog_bivar = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.add.t2 <- grid$h2_add_t2[i]
+    h2.cov <- grid$h2_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2.add.t2,
+                                               h2.cov = h2.cov, rhog = rhog, 
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G)
+
+    #Store results
+    SimRes$h2.add.t2_slopeMod[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slope_add_12']
+    SimRes$h2.add.t1_bivar[i] <- simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar']
+    SimRes$h2.add.t2_bivar[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar']
+    SimRes$h2.cov_slopeMod[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slope_add_12']
+    SimRes$rhog_bivar[i] <- simdat.modFit$rhog[simdat.modFit$model == 'bivar']
+    SimRes$runtime_slope[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slope_add_12']
+    SimRes$runtime_bivar[i] <- simdat.modFit$runtime[simdat.modFit$model == 'bivar']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+## h2.add.t2
+* x-axis = h2.add.t2 true
+* y-axis = h2.add.t2 estimated
+
+```{r plot_sim2_addT2, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+```
+
+## h2.cov & rhog
+* x-axis = h2.add.t2 true
+* y-axis = h2.cov (slope_add model), rhog (bivar model)
+
+Dashed lines indicate simulated values for h2.cov and rhog
+
+```{r plot_sim2_h2cov_rhog, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('slope_add    n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+```
+
+# Simulation 3: h2.cov + h2.add.t1 + h2.add.t2 + rhog
+
+```{r sim3, cache = T}
+#Parameters
+h2_cov <- c(0.3, 0.6)
+h2_add_t1 <- .3
+h2_add_t2 <- c(1e-4, 0.1, 0.2, 0.3)
+rhog <- .5
+resFile <- '../results/genoSim_n1perInd/sim3.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog)
+  SimRes <- data.frame(grid, runtime_slope = NA, runtime_bivar = NA,
+                       h2.add.t2_slopeMod = NA, 
+                       h2.add.t1_bivar = NA, h2.add.t2_bivar = NA,
+                       h2.cov_slopeMod = NA, rhog_bivar = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.add.t2 <- grid$h2_add_t2[i]
+    h2.cov <- grid$h2_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2.add.t2,
+                                               h2.cov = h2.cov, rhog = rhog, 
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G)
+
+    #Store results
+    SimRes$h2.add.t2_slopeMod[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slope_add_12']
+    SimRes$h2.add.t1_bivar[i] <- simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar']
+    SimRes$h2.add.t2_bivar[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar']
+    SimRes$h2.cov_slopeMod[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slope_add_12']
+    SimRes$rhog_bivar[i] <- simdat.modFit$rhog[simdat.modFit$model == 'bivar']
+    SimRes$runtime_slope[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slope_add_12']
+    SimRes$runtime_bivar[i] <- simdat.modFit$runtime[simdat.modFit$model == 'bivar']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+## h2.add.t2
+* x-axis = h2.add.t2 true
+* y-axis = h2.add.t2 estimated
+
+```{r plot_sim3_addT2, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.4), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+```
+
+## h2.cov & rhog
+* x-axis = h2.add.t2 true
+* y-axis = h2.cov (slope_add model), rhog (bivar model)
+
+Dashed lines indicate simulated values for h2.cov and rhog
+
+```{r plot_sim3_h2cov_rhog, echo = F, cache = T}
+cols <- wes_palette('Darjeeling2', 2)
+
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('slope_add    n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.9), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+```
+
+# Simulation 4: h2.cov + h2.add.t1 + h2.add.t2 + rhog
+
+Same as simulation 3 but with rhog = 0.9
+
+```{r sim4, cache = T}
+#Parameters
+h2_cov <- c(0.3, 0.6)
+h2_add_t1 <- .3
+h2_add_t2 <- c(1e-4, 0.1, 0.2, 0.3)
+rhog <- .9
+resFile <- '../results/genoSim_n1perInd/sim4.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog)
+  SimRes <- data.frame(grid, runtime_slope = NA, runtime_bivar = NA,
+                       h2.add.t2_slopeMod = NA, 
+                       h2.add.t1_bivar = NA, h2.add.t2_bivar = NA,
+                       h2.cov_slopeMod = NA, rhog_bivar = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.add.t2 <- grid$h2_add_t2[i]
+    h2.cov <- grid$h2_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2_add_t1, h2.add.t2 = h2.add.t2,
+                                               h2.cov = h2.cov, rhog = rhog, 
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G)
+
+    #Store results
+    SimRes$h2.add.t2_slopeMod[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slope_add_12']
+    SimRes$h2.add.t1_bivar[i] <- simdat.modFit$h2.add.t1[simdat.modFit$model == 'bivar']
+    SimRes$h2.add.t2_bivar[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'bivar']
+    SimRes$h2.cov_slopeMod[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slope_add_12']
+    SimRes$rhog_bivar[i] <- simdat.modFit$rhog[simdat.modFit$model == 'bivar']
+    SimRes$runtime_slope[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slope_add_12']
+    SimRes$runtime_bivar[i] <- simdat.modFit$runtime[simdat.modFit$model == 'bivar']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+## h2.add.t2
+* x-axis = h2.add.t2 true
+* y-axis = h2.add.t2 estimated
+
+```{r plot_sim4_addT2, echo = F, cache = T}
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,.45), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.45), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.45), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.add.t2_slopeMod', 'h2.add.t2_bivar')], ylab = '', xlab = '', legend.cex = 3, spacer2 = 2, ylim = c(0,.45), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = unique(SimRes$h2_add_t2), lty = 3)
+```
+
+## h2.cov & rhog
+* x-axis = h2.add.t2 true
+* y-axis = h2.cov (slope_add model), rhog (bivar model)
+
+Dashed lines indicate simulated values for h2.cov and rhog
+
+```{r plot_sim4_h2cov_rhog, echo = F, cache = T}
+cols <- wes_palette('Darjeeling2', 2)
+
+par(mfrow = c(2,2), mar = c(3,2,2,1))
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.text = c('slope_add', 'bivar'), legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,1), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[1] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,1), cex.axis = 1, cex.lab = 1)
+title(paste('slope_add    n =', vals_n[1], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[1]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,1), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[1]))
+abline(h = c(h2_cov[1], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+
+incl <- SimRes$n == vals_n[2] & SimRes$h2_cov == h2_cov[2]
+plot.contBoxes(x = SimRes$h2_add_t2[incl], y = SimRes[incl, c('h2.cov_slopeMod', 'rhog_bivar')], legend.title = NULL, ylab = '', xlab = '', spacer2 = 2, ylim = c(0,1), cex.axis = 1, cex.lab = 1)
+title(paste('n =', vals_n[2], 'x', nrep), line = 1.2)
+mtext(side = 3, paste('h2.cov =', h2_cov[2]))
+abline(h = c(h2_cov[2], rhog), lty = 2, lwd = 2, col = wes_palette('Darjeeling2', 2))
+```
+
+# Runtime
+```{r plot_runtime, echo = F, cache = T}
+resFiles <- list.files('../results/genoSim_n1perInd/', full.names = T)
+SimRes.all <- data.frame()
+for (i in 1:length(resFiles)) {
+  load(resFiles[i])
+  SimRes.all <- rbind(SimRes.all, SimRes)
+}
+
+par(mfrow = c(2,1), mar = c(3,4,2,2))
+boxplot(SimRes.all$runtime_slope[SimRes.all$n == vals_n[1]], 
+        SimRes.all$runtime_bivar[SimRes.all$n == vals_n[1]], 
+        main = paste('n =', vals_n[1], 'x', nrep), xlab = '', ylab = 'Minutes', las = 2)
+axis(side = 1, at = 1:2, labels = c('slope_add', 'bivar'))
+
+boxplot(SimRes.all$runtime_slope[SimRes.all$n == vals_n[2]], 
+        SimRes.all$runtime_bivar[SimRes.all$n == vals_n[2]], 
+        main = paste('n =', vals_n[2], 'x', nrep), xlab = '', ylab = 'Minutes', las = 2)
+axis(side = 1, at = 1:2, labels = c('slope_add', 'bivar'))
+```
+
+Average runtimes (minutes):
+
+| slope_add **n = `r vals_n[1]`**x10 | bivar **n = `r vals_n[1]`**x10 | slope_add **n = `r vals_n[2]`**x10 | bivar **n = `r vals_n[2]`**x10 |
+|--------------|--------------|--------------|--------------|
+| `r round(mean(SimRes.all$runtime_slope[SimRes.all$n == vals_n[1]]), digits = 3)` | `r round(mean(SimRes.all$runtime_bivar[SimRes.all$n == vals_n[1]]), digits = 3)`| `r round(mean(SimRes.all$runtime_slope[SimRes.all$n == vals_n[2]]), digits = 3)` | `r round(mean(SimRes.all$runtime_bivar[SimRes.all$n == vals_n[2]]), digits = 3)` |
+
+

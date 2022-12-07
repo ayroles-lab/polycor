@@ -1,0 +1,5 @@
+## COPDGene dataset
+
+[https://www.atsjournals.org/doi/abs/10.1164/rccm.201707-1405OC](https://www.atsjournals.org/doi/abs/10.1164/rccm.201707-1405OC)
+
+The COPDGene Study is an ongoing multicenter, longitudinal study designed to investigate the genetic and epidemiologic characteristics of COPD (12). COPDGene enrolled 10,192 non-Hispanic white and African-American ever-smokers. Subjects were between the ages of 45 and 80 years and had a minimum 10-pack-year smoking history. Study data included the collection of detailed questionnaires, spirometric measures of lung function before and after the administration of short-acting bronchodilating medications, volumetric CT of the chest, and blood samples for genome-wide SNP genotyping. Genotyping was performed by Illumina on the HumanOmniExpress array. Subjects were excluded for missingness, heterozygosity, chromosomal aberrations, sex check, population outliers, and cryptic relatedness as previously described (13). A 5-year follow-up visit was performed, during which baseline data collection was repeated.

@@ -1,0 +1,258 @@
+---
+title: 'Data simulations: GxEMM versus GE random slope model'
+author: "Simon Forsberg"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: null
+  theme: default
+subtitle: GxEMM gtype=iid, etype=hom VS gtype=iid, etype=iid
+keep_md: yes
+urlcolor: blue
+---
+
+```{r options, echo = F}
+library(knitr)
+opts_chunk$set(dev = "png", dpi = 192, fig.path = "../figures/", comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T)
+```
+
+## Generative model in simulations
+
+$y_1 = G*g_{add1} + e_1$
+
+$y_2 = G*g_{add2} + (G*g_{cov} + e_{cov})*y_1 + e_2$
+
+**Where:**
+
+* G is the genotype matrix
+* $g_{add1} \sim N(0, h^2_{add1}/n_{loci})$ is the per SNP additive effect on y1
+* $g_{add2} \sim N(0, h^2_{add2}/n_{loci})$ is the per SNP additive effect on y2
+* $g_{cov} \sim N(0, h^2_{cov}/n_{loci})$ is the per SNP effect on the slope
+* $e_{cov} \sim N(0, \sigma^2_{cov})$ is the per individual environmental effect on the slope
+* $e_1 \sim N(0, 1 - h^2_{add1})$
+* $e_2 \sim N(0, 1 - h^2_{add2} - h^2_{cov} - \sigma^2_{cov})$
+* $r_g$ describes the fraction of g_add1 and g_add2 that are the same, eg pleiotropy. ($r_g = 0$ here)
+
+## Estimated Models
+
+#### GE random slope model
+Both environmental and genetic random slopes:
+
+$y_2 = \mu + b_{g,int} + (\beta + b_{g,slope} + b_{e,slope})*y_1 + e$
+
+**Where:**
+
+* $\mu$ and $\beta$ are fixed effects
+* $b_{g,int} \sim N(0,K\sigma^2_{g,int})$
+* $b_{g,slope} \sim N(0,K\sigma^2_{g,slope})$
+* $b_{e,slope} \sim N(0,I\sigma^2_{e,slope})$
+* $e \sim N(0,I\sigma^2_{e})$
+* K is the kinship matrix, estimated from G
+
+#### GxEMM
+
+* Model 1: gtype=iid, etype=hom
+* Model 2: gtype=iid, etype=iid
+
+Details [here](https://www.sciencedirect.com/science/article/abs/pii/S0002929719304628)
+
+
+
+```{r inc, echo=F}
+library(tidyverse)
+library(magrittr)
+
+library(Matrix)
+library(MASS)
+
+library(nlme)
+library(lme4)
+
+library(cowplot)
+library(wesanderson)
+library(ggpubr)
+library(GxEMM)
+
+theme_set(theme_cowplot(font_size = 10))
+
+# change to your path here, e.g. based on `nodemame`
+path <- switch(Sys.info()[['nodename']],
+               "~/git/hemostat/polycor/", 'gen-sflaptop' = '/media/sf9/ExtraDrive1/Dropbox/Research_170228/covQTL/bin/polycor/',
+               'gen-comp1.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor',
+               'gen-comp2.princeton.edu' = '/Genomics/ayroleslab2/simon/covProj/bin/polycor')
+
+src <- file.path(path, "modelFitting.R")
+source(src)
+
+src <- file.path(path, "simFunctions.R")
+source(src)
+
+src <- file.path(path, "plotFunctions.R")
+source(src)
+
+ldak_loc  <- file.path(path, "../gxemm/ldak5.linux")
+```
+
+
+## Parameters
+
+```{r par}
+testing <- F
+
+n_loci <- 400 #number of loci
+nrPops <- 10  #number of subpopulations
+Fst <- .3     #degree of stratification
+models <- c("slopeGandE_add_12", "gxemm_iid", "gxemm_giid_eiid")
+
+#Sample sizes and number of simulations
+nrep <- 1       #n observations
+vals_n <- 1000  #N Individuals
+vals_sim <- 1:5 #Simulations per parameter combination
+
+h2_cov <- c(0, 0.2, 0.4)
+h2_add_t1 <- 0
+h2_add_t2 <- 0
+sigma_cov <- c(0, 0.2, 0.4)
+rhog <- 0
+
+if(testing) {
+  nrep <- 1
+  vals_n <- 100
+  vals_sim <- 1:2
+}
+```
+
+
+# Simulation: $h^2_{cov} + \sigma^2_{cov}$
+
+```{r sim1, cache = T}
+resFile <- '../results/sim_gxemm_iidVShom.RData'
+
+if(!file.exists(resFile)){
+  grid <- expand.grid(n = as.integer(vals_n), sim = vals_sim, h2_add_t1 = h2_add_t1, h2_add_t2 = h2_add_t2, h2_cov = h2_cov, rhog = rhog, sigma_cov = sigma_cov)
+  SimRes <- data.frame(grid, runtime_slopeGE = NA, runtime_ehom_gxemm = NA, runtime_eiid_gxemm = NA, 
+                       h2.add.t2_slopeMod_GE = NA, 
+                       h2.cov_slopeMod_GE = NA, 
+                       sigma.cov_slopeMod_GE = NA,
+                       gxemm_ehom_h2.hom = NA,
+                       gxemm_ehom_h2.het = NA,
+                       gxemm_eiid_h2.hom = NA,
+                       gxemm_eiid_h2.het = NA)
+  
+  for(i in 1:nrow(grid)){
+    n <- grid$n[i]
+    sim <- grid$sim[i]
+    h2.cov <- grid$h2_cov[i]
+    h2.add1 <- grid$h2_add_t1[i]
+    h2.add2 <- grid$h2_add_t2[i]
+    sigma.cov <- grid$sigma_cov[i]
+    message(i, "/", nrow(grid), "\n")
+    
+    #Run simulation
+    simdat <- genBivarCov.simulatePair_outbred(n_ind = n, n_perInd = nrep, 
+                                               h2.add.t1 = h2.add1, h2.add.t2 = h2.add2,
+                                               h2.cov = h2.cov, rhog = rhog, e.cov = sigma.cov,
+                                               nrPops = nrPops, Fst = Fst, postproc = T)
+    
+    #Fit models
+    simdat.modFit <- run_models(models, simdat$pheno, simdat$G, ldak_loc = ldak_loc)
+    
+    #Store results
+    SimRes$runtime_slopeGE[i] <- simdat.modFit$runtime[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$runtime_ehom_gxemm[i] <- simdat.modFit$runtime[simdat.modFit$model == 'gxemm_iid']
+    SimRes$runtime_eiid_gxemm[i] <- simdat.modFit$runtime[simdat.modFit$model == 'gxemm_giid_eiid']
+    SimRes$h2.add.t2_slopeMod_GE[i] <- simdat.modFit$h2.add.t2[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$h2.cov_slopeMod_GE[i] <- simdat.modFit$h2.cov_12[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$sigma.cov_slopeMod_GE[i] <- simdat.modFit$e.cov_12[simdat.modFit$model == 'slopeGandE_add_12']
+    SimRes$gxemm_ehom_h2.hom[i] <- simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_iid']
+    SimRes$gxemm_ehom_h2.het[i] <- simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_iid']
+    SimRes$gxemm_eiid_h2.hom[i] <- simdat.modFit$h2.hom_gxemm[simdat.modFit$model == 'gxemm_giid_eiid']
+    SimRes$gxemm_eiid_h2.het[i] <- simdat.modFit$h2.het_gxemm[simdat.modFit$model == 'gxemm_giid_eiid']
+  }
+  save(list = 'SimRes', file = resFile)
+}else
+  load(resFile)
+```  
+
+
+# Results
+
+* x-axes = simulated $h^2_{cov}$ 
+* y-axes = estimates of $h^2_{cov}$, $\sigma^2_{cov}$ (from GE random slope model), and $h^2_{het}$ (from GxEMM) 
+
+
+## $h^2_{cov} + \sigma^2_{cov}$
+
+
+```{r plot_h2cov_ecov_iidVShom, echo = F, cache = T}
+cols1 <- grep('cov_', colnames(SimRes))
+cols2 <- grep('gxemm.*h2.het', colnames(SimRes))
+cols <- c(cols1, cols2)
+
+#h2_add_t1 = 0, h2_add_t2 = 0, sigma_cov = 0
+incl <- SimRes$h2_add_t1 == h2_add_t1[1] & SimRes$h2_add_t2 == h2_add_t2[1] & SimRes$sigma_cov == sigma_cov[1]
+
+SimRes.long <- pivot_longer(SimRes[incl,], cols = cols)
+g_1 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+  geom_boxplot() +
+  theme(legend.title=element_text(size=30, face = 'bold'), 
+        legend.text=element_text(size=10), 
+        axis.text=element_text(size=10),
+        axis.title=element_text(size=10),
+        plot.title = element_text(hjust = 0.5, size = 10),
+        plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+  ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+  guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+  ggtitle(bquote(sigma[e.cov]^2 ~ '=' ~ .(sigma_cov[1]) ~ h[add1]^2 ~ '=' ~ .(h2_add_t1[1]) ~ h[add2]^2 ~ '=' ~ .(h2_add_t2[1]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+
+#h2_add_t1 = 0, h2_add_t2 = 0, sigma_cov = 0.2
+incl <- SimRes$h2_add_t1 == h2_add_t1[1] & SimRes$h2_add_t2 == h2_add_t2[1] & SimRes$sigma_cov == sigma_cov[2]
+SimRes.long <- pivot_longer(SimRes[incl,], cols = cols)
+g_2 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+  geom_boxplot() +
+  theme(legend.title=element_text(size=30, face = 'bold'), 
+        legend.text=element_text(size=10), 
+        axis.text=element_text(size=10),
+        axis.title=element_text(size=10),
+        plot.title = element_text(hjust = 0.5, size = 10),
+        plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+  ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+  guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+  ggtitle(bquote(sigma[e.cov]^2 ~ '=' ~ .(sigma_cov[2]) ~ h[add1]^2 ~ '=' ~ .(h2_add_t1[1]) ~ h[add2]^2 ~ '=' ~ .(h2_add_t2[1]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+
+#h2_add_t1 = 0, h2_add_t2 = 0, sigma_cov = 0.4
+incl <- SimRes$h2_add_t1 == h2_add_t1[1] & SimRes$h2_add_t2 == h2_add_t2[1] & SimRes$sigma_cov == sigma_cov[3]
+SimRes.long <- pivot_longer(SimRes[incl,], cols = cols)
+g_3 <- ggplot(data = SimRes.long, aes(y = value, x = factor(h2_cov), color = name)) + 
+  geom_boxplot() +
+  theme(legend.title=element_text(size=30, face = 'bold'), 
+        legend.text=element_text(size=10), 
+        axis.text=element_text(size=10),
+        axis.title=element_text(size=10),
+        plot.title = element_text(hjust = 0.5, size = 10),
+        plot.subtitle = element_text(hjust = 0.5, size = 10)) + 
+  ylab('Estimate') + xlab(expression('Simulated' ~ h[cov]^2)) +
+  guides(colour=guide_legend(title="", override.aes = list(size = 2)) ) +
+  ggtitle(bquote(sigma[e.cov]^2 ~ '=' ~ .(sigma_cov[3]) ~ h[add1]^2 ~ '=' ~ .(h2_add_t1[1]) ~ h[add2]^2 ~ '=' ~ .(h2_add_t2[1]))) +
+  geom_hline(yintercept = unique(SimRes$h2_cov), linetype = 'dashed')
+
+
+legend <- cowplot::get_legend(g_1)
+ggarrange(g_1 + theme(legend.position = "none"), 
+          g_2 + theme(legend.position = "none"), 
+          g_3 + theme(legend.position = "none"),
+          legend)
+```
+
+
+
+# Runtime
+```{r plot_runtime_iidVShom, echo = F, cache = T}
+boxplot(SimRes$runtime_slopeGE, SimRes$runtime_ehom_gxemm, SimRes$runtime_eiid_gxemm, xaxt = 'n', ylab = '')
+axis(side = 1, at = 1:3, labels = c('Random Slope GE', 'GxEMM ehom', 'GxEMM eiid'), cex.axis = 1)
+mtext('Minutes', side = 2, cex = 2, line = 2)
+```
+
+

@@ -1,0 +1,195 @@
+---
+title: "Learning basics about correlations"
+author: "Andrey Ziyatdinov"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: united
+    toc: true
+    keep_md: true
+---
+
+```{r options, echo = F}
+opts_chunk$set(dev = "png", dpi = 192, fig.path = "figures/", comment = NA, results = 'markup', tidy = F, message = F, warning = F, echo = T)
+```
+
+```{r inc, cache = F, echo = F}
+library(pander)
+```
+
+```{r settings, cache = F, echo = F}
+panderOptions('table.style', 'rmarkdown')
+
+panderOptions('table.split.table', Inf)
+panderOptions('knitr.auto.asis', FALSE)
+
+panderOptions('table.alignment.default', 'left')
+```
+
+# Include custom code
+
+```{r inc_custom, cache = F}
+library(Matrix)
+library(MASS)
+library(lme4)
+
+library(tidyverse)
+library(magrittr)
+
+library(ggplot2)
+library(cowplot)
+theme_set(theme_cowplot())
+
+path <- switch(Sys.info()[['nodename']],
+  "~/git/hemostat/polycor/" )
+  
+file.path(path, "relmer.R") %>% source
+file.path(path, "simFunctions.R") %>% source
+```
+
+# Two pleitropic traits
+
+We quickly run a single round of data simulation and conclusions differ from simulation to simulation.
+Multiple runs and larger smaple sizes are needed to evaluate the accurcy of estimates.
+
+## Two pleitropic traits + bi-variate model
+
+Given the two traits are simulated under a bi-variate model with a substantial portion of genetic covariance,
+what estimates of heritabilities are expected from uni-variate models?
+
+Simulate two pleitropic traits:
+ 
+```{r simbivar, cache = T}
+set.seed(1)
+simdat <- pleiotropy.simulatePairKin(n_ind = 500, n_perInd = 1, 
+  h2 = 0.5, overlap = 0.9)
+
+dat <- simdat$pheno %>% as_tibble %>%
+  mutate(
+    trait1sc = as.numeric(scale(trait1)), trait2sc = as.numeric(scale(trait2)),
+    id = as.factor(as.character(id)), rid = id)
+bdat <- gather(dat, tname, tvalue, trait1sc, trait2sc)
+
+G <- simdat$G
+```
+
+Fit the standard bi-variate model (weights):
+
+
+```{r bivar, cache = T, dependson = "simbivar"}
+mod <- relmer(tvalue ~ -1 + tname + (0 + tname|id) + (0 + tname|rid), 
+  bdat, relmat = list(id = G), 
+  weights = rep(1e10, nrow(bdat)), calc.derivs = FALSE)
+mod
+```
+
+
+Fit the standard bi-variate model (no weights/redundant residual random effects):
+
+
+```{r bivar_noweights, cache = T, dependson = "simbivar"}
+mod <- relmer(tvalue ~ -1 + tname + (0 + tname|id) + (0 + tname|rid), 
+  bdat, relmat = list(id = G), 
+  calc.derivs = FALSE)
+mod
+```
+
+Fit uni-variate models for each trait and estimates of heritability:
+
+```{r univar, cache = T, dependson = "simbivar"}
+mod1 <- relmer(trait1 ~ (1|id), dat, relmat = list(id = G)) 
+mod1 %>% VarProp %>% .[1, "prop"]
+
+mod2 <- relmer(trait2 ~ (1|id), dat, relmat = list(id = G)) 
+mod2 %>% VarProp %>% .[1, "prop"]
+```
+
+
+## Two random-sloped traits + bi-variate model
+
+We simulate two traits under a extreme scenario for bi-variate model
+(random-slope data simulation model):
+
+- no additive variance for any trait;
+- random-slope genetic covariance.
+
+What estimates of heritability are produced by uni-variate models?
+
+Simulate two traits:
+
+```{r simcov, cache = T}
+set.seed(1)
+simdat <- genCov.simulatePairKin(n_ind = 500, n_perInd = 1, 
+  h2.cov = 0.9, h2.add = 0)
+
+dat <- simdat$pheno %>% as_tibble %>%
+  mutate(
+    trait1sc = as.numeric(scale(trait1)), trait2sc = as.numeric(scale(trait2)),
+    id = as.factor(as.character(id)), rid = id)
+bdat <- gather(dat, tname, tvalue, trait1sc, trait2sc)
+
+G <- simdat$G
+```
+
+Fit the standard bi-variate model:
+
+- in some runs: the overall genetic component of variance is close to zero;
+- in other runs: the trait2-specific heritabilty seems different from zero.
+
+```{r bivar2, cache = T, dependson = "simcov"}
+mod <- relmer(tvalue ~ -1 + tname + (0 + tname|id) + (0 + tname|rid), 
+  bdat, relmat = list(id = G), 
+  calc.derivs = FALSE)
+mod
+```
+
+Fit uni-variate models for each trait and estimates of heritability:
+
+- the estimates of heritability for each trait is zero.
+
+```{r univar2, cache = T, dependson = "simcov"}
+mod1 <- relmer(trait1 ~ (1|id), dat, relmat = list(id = G)) 
+mod1 %>% VarProp %>% .[1, "prop"]
+
+mod2 <- relmer(trait2 ~ (1|id), dat, relmat = list(id = G)) 
+mod2 %>% VarProp %>% .[1, "prop"]
+```
+
+# Population vs. within individual correlation
+
+## Two pleitropic traits + repeats 
+
+```{r bivar_rep_cor, cache = T}
+set.seed(1)
+simdat <- pleiotropy.simulatePairKin(n_ind = 10, n_perInd = 100, 
+  h2 = 0.95, overlap = 0.95)
+
+dat <- simdat$pheno %>% as_tibble %>%
+  mutate(
+    trait1sc = as.numeric(scale(trait1)), trait2sc = as.numeric(scale(trait2)))
+
+ggplot(dat, aes(trait1sc, trait2sc)) + geom_point() + geom_smooth(method = "lm", color = "red") + geom_hline(yintercept = 0, linetype = 3) + geom_abline(linetype = 3) + labs(title = "Population-level corr.")
+
+ggplot(filter(dat, id %in% 1:4), aes(trait1sc, trait2sc)) + geom_point() + geom_smooth(method = "lm", color = "blue") + geom_hline(yintercept = 0, linetype = 3) + geom_abline(linetype = 3) + facet_wrap(~ id)  + labs(title = "Individual-level corr.")
+```
+
+## Two random-slope traits + repeats 
+
+```{r slope_rep_cor, cache = T}
+set.seed(1)
+simdat <- genCov.simulatePairKin(n_ind = 10, n_perInd = 100, 
+  h2.cov = 0.95, h2.add = 0)
+
+dat <- simdat$pheno %>% as_tibble %>%
+  mutate(
+    trait1sc = as.numeric(scale(trait1)), trait2sc = as.numeric(scale(trait2)))
+
+ggplot(dat, aes(trait1sc, trait2sc)) + geom_point() + geom_smooth(method = "lm", color = "red") + geom_hline(yintercept = 0, linetype = 3) + geom_abline(linetype = 3) + labs(title = "Population-level corr.")
+
+ggplot(filter(dat, id %in% 1:4), aes(trait1sc, trait2sc)) + geom_point() + geom_smooth(method = "lm", color = "blue") + geom_hline(yintercept = 0, linetype = 3) + geom_abline(linetype = 3) + facet_wrap(~ id) + labs(title = "Individual-level corr.")
+```
+
+```{r ind_slopes, dependson = -1}
+simdat$pheno$g.cov %>% unique %>% head(4) %>% round(2)
+```
+
