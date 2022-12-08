@@ -5,8 +5,8 @@ library(lme4qtl)
 library(magrittr)
 
 #Change to your paths 
-source('lme4qtl/R/utils.lib.R')  #To get the function relmatRanef
-source('polycor/simFunctions.R') #To get the simulation function genCov.simulatePair
+source(here::here('lme4qtl/R/utils.lib.R'))  #To get the function relmatRanef
+source(here::here('simFunctions.R')) #To get the simulation function genCov.simulatePair
 
 #### Simulation parameters ####
 n_loci <- 1000    #Number of loci. All will be independent (no LD) and causal
