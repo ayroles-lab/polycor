@@ -5,6 +5,8 @@ data {
   array[N] real Y;                       // y_2
   array[N] real X;                       // y_1
   cov_matrix[N_ids] A;                   // GRM matrix
+  vector[2] bets_prior_trait;
+  vector[2] bets_prior_slope;
 }
 transformed data{
   matrix[N_ids, N_ids] LA;
@@ -67,8 +69,8 @@ model {
     L_sigma ~ normal(0, 0.5);
 
     // variance partition priors
-    h2_beta ~ beta(2, 4);
-    h2 ~ beta(2, 2);
+    h2_beta ~ beta(bets_prior_slope[1], bets_prior_slope[2]);
+    h2 ~ beta(bets_prior_trait[1], bets_prior_trait[2]);
 
     // random effect precursors
     beta_tilde ~ std_normal();
@@ -80,7 +82,20 @@ model {
 generated quantities {
     corr_matrix[K] corrG;
     real rho;
-
+    vector[N] log_lik;
+    vector[N] mu_x;
+    vector[N] mu_y;
+    vector[N] mu_beta;
+    
+    // per observation mean parameters
+    for(n in 1:N){
+      mu_beta[n] = beta_0 + beta_add[id[n]];
+      mu_x[n] = mu_x_0 + a[id[n], 1];
+      mu_y[n] = mu_y_0 + a[id[n], 2] + beta[n] * X[n];
+      log_lik[n] = normal_lpdf(Y[n] | mu_y[n], L_sigma_R[2]) + 
+                   normal_lpdf(X[n] | mu_x[n], L_sigma_R[1]);
+    }
+      
     corrG = multiply_lower_tri_self_transpose(L_Omega_G);
     rho = corrG[1,2];
 }

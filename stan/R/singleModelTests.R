@@ -2,7 +2,7 @@
 cmdstanr::check_cmdstan_toolchain(fix = TRUE, quiet = TRUE)
 cmdstanr::install_cmdstan()
 
-pak::pkg_install(c("rmcelreath/rethinking", "bayesplot", "posterior", "ggplot2", "cowplot", "patchwork"))
+pak::pkg_install(c("rmcelreath/rethinking", "bayesplot", "posterior", "ggplot2", "cowplot", "patchwork", "loo"))
 
 library(rethinking)
 library(cmdstanr)
@@ -11,6 +11,7 @@ library(cowplot)
 library(posterior)
 library(bayesplot)
 library(patchwork)
+library(loo)
 color_scheme_set("brightblue")
 
 source(here::here("simFunctions.R"))
@@ -26,7 +27,7 @@ sigma_y = 1
 
 G = simulateKinship(N_id)
 
-h2_beta = 0.8
+h2_beta = 0.7
 sigma_beta = 1
 
 beta_0 = 1
@@ -47,13 +48,17 @@ mod_uni <- cmdstan_model(here::here("stan/models/univariateRandomSlopes.stan"))
 #   array[N] real Y;                       // y_2
 #   array[N] real X;                       // y_1
 #   cov_matrix[N_ids] A;                   // GRM matrix
+#   vector[2] bets_prior_trait;
+#   vector[2] bets_prior_slope;
 # }
 data_list_uni = list(N = N, 
                      N_ids = N_id,
                      id = rep(1:N_id, each = N_rep),
                      Y = y - mean(y),
                      X = x,
-                     A = as.matrix(G))
+                     A = as.matrix(G),
+                     beta_prior_trait = c(1, 1),
+                     beta_prior_slope = c(2, 2))
 fit_uni <- mod_uni$sample(
   data = data_list_uni,
   seed = 123,
@@ -61,7 +66,7 @@ fit_uni <- mod_uni$sample(
   parallel_chains = 4,
   refresh = 500 # print update every 500 iters
 )
-fit_uni$summary()
+(fit_summary_uni = fit_uni$summary())
 png("test.png", height = 900, width = 1000)
 (mcmc_recover_hist(fit_uni$draws("mu_0"), 0) +
 mcmc_recover_hist(fit_uni$draws("beta_0"), 1)) / 
@@ -121,13 +126,17 @@ mod_bi <- cmdstan_model(here::here("stan/models/bivariateRandomSlopes.stan"))
 #   array[N] real Y;                       // y_2
 #   array[N] real X;                       // y_1
 #   cov_matrix[N_ids] A;                   // GRM matrix
+#   vector[2] bets_prior_trait;
+#   vector[2] bets_prior_slope;
 # }
 data_list_bi = list(N = N, 
                     N_ids = N_id,
                     id = rep(1:N_id, each = N_rep),
                     Y = y - mean(y),
                     X = ((x - mean(x))/sd(x)),
-                    A = as.matrix(G))
+                    A = as.matrix(G), 
+                    beta_prior_trait = c(1, 1),
+                    beta_prior_slope = c(2, 2))
 fit_bi <- mod_bi$sample(
   data = data_list_bi,
   seed = 123,
@@ -161,8 +170,35 @@ data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))),
            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Random Slope BLUPs (beta.add)")
 dev.off()
 
-png("test.png", height = 1000, width = 1000)
-mcmc_pairs(
-  fit_bi$draws(),
-  regex_pars = c("mu", "^sigma_"))
-dev.off()
+data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))), 
+           true = as.vector(beta.add)) |> cor()
+
+
+fit_bi <- mod_bi$sample(
+  data = data_list_bi,
+  seed = 123,
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
+  parallel_chains = 4,
+  max_treedepth = 11,
+  refresh = 0 
+)
+fit_uni <- mod_uni$sample(
+  data = data_list_bi,
+  seed = 123,
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
+  parallel_chains = 4,
+  max_treedepth = 11,
+  refresh = 0 
+)
+
+log_lik_1 <- loo::extract_log_lik(rstan::read_stan_csv(fit_uni$output_files()), 
+merge_chains = FALSE) 
+log_lik_2 <- loo::extract_log_lik(myfit2, merge_chains = FALSE)
+
+loo1 <- loo::loo(fit_uni$draws(), save_psis = TRUE)
+loo2 <- loo::loo(fit_bi$draws(), save_psis = TRUE)
+loo::loo_compare(loo1, loo2)

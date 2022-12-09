@@ -5,6 +5,8 @@ data {
   array[N] real Y;                       // y_2
   array[N] real X;                       // y_1
   cov_matrix[N_ids] A;                   // GRM matrix
+  vector[2] bets_prior_trait;
+  vector[2] bets_prior_slope;
 }
 transformed data{
   matrix[N_ids, N_ids] LA;
@@ -41,9 +43,9 @@ model {
     beta_0 ~ normal(0, 1);
     mu_0 ~ normal(0, 1);
     sigma_y ~ normal(0, 1);
-    h2_y ~ beta(2, 4);
+    h2_y ~ beta(beta_prior_trait[1], beta_prior_trait[2]);
     sigma_beta ~ normal(0, 1);
-    h2_beta ~ beta(2, 4);
+    h2_beta ~ beta(bets_prior_slope[1], bets_prior_slope[2]);
     a_tilde ~ normal(0, 1);
     beta_tilde ~ normal(0, 1);
 }
