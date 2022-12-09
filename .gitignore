@@ -13,3 +13,4 @@ test.png
 stan/models/univariateRandomSlopes
 stan/models/univariate
 stan/models/bivariateRandomSlopes
+stan/models/bivariateRandomSlopes
