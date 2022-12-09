@@ -88,7 +88,7 @@ N = N_id * N_rep
 h2_x = 0.4
 sigma_x = 1
 
-h2_y = 0.2
+h2_y = 0.8
 sigma_y = 1
 
 h2_beta = 0.8
@@ -97,6 +97,7 @@ sigma_beta = 1
 G = simulateKinship(N_id)
 
 rhog = 0.5
+
 varG = c(sigma_x * h2_x, sigma_y * h2_y)
 Sigma_xy = sqrt(varG) %*% t(sqrt(varG)) * matrix(c(1, 0.5, 0.5, 1), 2) 
 g_tilde = MASS::mvrnorm(N_id, c(0, 0), Sigma = diag(2))
@@ -110,7 +111,7 @@ x.add = g.add[,1]
 x = rep(x.add, each = N_rep) + rnorm(N, sd = sigma_x * sqrt(1-h2_x))
 
 y.add = g.add[,2]
-y = rep(y.add, each = N_rep) + rnorm(N, sd = sigma_y * sqrt(1-h2_y)) + beta * x
+y = rep(y.add, each = N_rep) + rnorm(N, sd = sigma_y * sqrt(1-h2_y)) + beta * ((x - mean(x))/sd(x))
 
 mod_bi <- cmdstan_model(here::here("stan/models/bivariateRandomSlopes.stan"))
 # data {
@@ -125,16 +126,16 @@ data_list_bi = list(N = N,
                     N_ids = N_id,
                     id = rep(1:N_id, each = N_rep),
                     Y = y - mean(y),
-                    X = x,
+                    X = ((x - mean(x))/sd(x)),
                     A = as.matrix(G))
 fit_bi <- mod_bi$sample(
   data = data_list_bi,
   seed = 123,
-  chains = 8,
-  iter_warmup = 2000,
-  iter_sampling = 2000,
-  parallel_chains = 8,
-  adapt_delta = 0.99, max_treedepth = 13,
+  chains = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
+  parallel_chains = 4,
+  #adapt_delta = 0.9, max_treedepth = 11,
   refresh = 500 # print update every 500 iters
 )
 fit_bi$summary()
@@ -148,9 +149,9 @@ png("test.png", height = 900, width = 1000)
   plot_layout(guides = 'collect')
 dev.off()
 
-{png("test.png", height = 450, width = 1000)
+png("test.png", height = 450, width = 1000)
 data.frame(estimate = colMeans(colMeans(fit_bi$draws("a"))), 
-           true = c(as.vector(x.add), as.vector(y.add)), 
+           true = c(as.vector(x.add), as.vector(y.add)),
            trait = rep(c("x", "y"), each = N_id)) |> 
            ggplot(aes(true, estimate, color = trait)) + 
            labs(x = "Simulated True Value", y = "Model Estimate") +
@@ -158,4 +159,10 @@ data.frame(estimate = colMeans(colMeans(fit_bi$draws("a"))),
 data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))), 
            true = as.vector(beta.add)) |> ggplot(aes(true, estimate)) + labs(x = "Simulated True Value", y = "Model Estimate") +
            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Random Slope BLUPs (beta.add)")
-dev.off()}
+dev.off()
+
+png("test.png", height = 1000, width = 1000)
+mcmc_pairs(
+  fit_bi$draws(),
+  regex_pars = c("mu", "^sigma_"))
+dev.off()

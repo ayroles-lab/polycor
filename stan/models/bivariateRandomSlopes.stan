@@ -59,20 +59,20 @@ model {
 
     // Intercept priors
     beta_0 ~ normal(0, 1);
-    mu_x_0 ~ normal(0, 1);
-    mu_y_0 ~ normal(0, 1);
+    mu_x_0 ~ normal(0, 0.3);
+    mu_y_0 ~ normal(0, 0.3);
 
     // sd priors
-    sigma_beta ~ normal(0, 1);
-    L_sigma ~ normal(0, 1);
+    sigma_beta ~ normal(0, 0.5);
+    L_sigma ~ normal(0, 0.5);
 
     // variance partition priors
     h2_beta ~ beta(2, 4);
     h2 ~ beta(2, 2);
 
     // random effect precursors
-    beta_tilde ~ normal(0, 1);
-    to_vector(a_tilde) ~ normal(0, 1);
+    beta_tilde ~ std_normal();
+    to_vector(a_tilde) ~ std_normal();
     
     // trait genetic correlation prior
     L_Omega_G ~ lkj_corr_cholesky(4);

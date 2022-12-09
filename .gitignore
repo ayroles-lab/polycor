@@ -12,3 +12,4 @@ output/
 test.png
 stan/models/univariateRandomSlopes
 stan/models/univariate
+stan/models/bivariateRandomSlopes
