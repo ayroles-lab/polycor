@@ -49,3 +49,12 @@ model {
     a_tilde ~ normal(0, 1);
     beta_tilde ~ normal(0, 1);
 }
+generated quantities {
+    vector[N] log_lik;
+    vector[N] mu;
+    
+    for(n in 1:N){
+      mu[n] = mu_0 + beta[n] * X[n] + a[id[n]];
+      log_lik[n] = normal_lpdf(Y[n] | mu[n], sigma_beta*sqrt(1 - h2_beta));
+    }
+}

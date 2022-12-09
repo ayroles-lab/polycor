@@ -18,7 +18,7 @@ source(here::here("simFunctions.R"))
 
 #### Random slopes ####
 
-N_id  = 250
+N_id  = 200
 N_rep = 5
 N = N_id * N_rep
 
@@ -27,7 +27,7 @@ sigma_y = 1
 
 G = simulateKinship(N_id)
 
-h2_beta = 0.7
+h2_beta = 0.6
 sigma_beta = 1
 
 beta_0 = 1
@@ -51,14 +51,17 @@ mod_uni <- cmdstan_model(here::here("stan/models/univariateRandomSlopes.stan"))
 #   vector[2] h2_prior_trait;
 #   vector[2] h2_prior_slope;
 # }
+png("test.png", height = 500, width = 500)
+curve(dbeta(x, shape1 = 3, shape2 = 4.5))
+dev.off()
 data_list_uni = list(N = N, 
                      N_ids = N_id,
                      id = rep(1:N_id, each = N_rep),
                      Y = y - mean(y),
                      X = x,
                      A = as.matrix(G),
-                     h2_prior_trait = c(1, 1),
-                     h2_prior_slope = c(2, 2))
+                     h2_prior_trait = c(3, 4),
+                     h2_prior_slope = c(3, 4))
 fit_uni <- mod_uni$sample(
   data = data_list_uni,
   seed = 123,
@@ -93,7 +96,7 @@ N = N_id * N_rep
 h2_x = 0.4
 sigma_x = 1
 
-h2_y = 0.8
+h2_y = 0.3
 sigma_y = 1
 
 h2_beta = 0.8
@@ -127,7 +130,7 @@ mod_bi <- cmdstan_model(here::here("stan/models/bivariateRandomSlopes.stan"))
 #   array[N] real X;                       // y_1
 #   cov_matrix[N_ids] A;                   // GRM matrix
 #   vector[2] h2_prior_trait;
-#   vector[2] h2_prior_slope;
+#   vector[2] h2typos_prior_slope;
 # }
 data_list_bi = list(N = N, 
                     N_ids = N_id,
@@ -135,8 +138,8 @@ data_list_bi = list(N = N,
                     Y = y - mean(y),
                     X = ((x - mean(x))/sd(x)),
                     A = as.matrix(G), 
-                    h2_prior_trait = c(1, 1),
-                    h2_prior_slope = c(2, 2))
+                    h2_prior_trait = c(3, 4),
+                    h2_prior_slope = c(3, 4))
 fit_bi <- mod_bi$sample(
   data = data_list_bi,
   seed = 123,
@@ -175,30 +178,38 @@ data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))),
 
 
 fit_bi <- mod_bi$sample(
-  data = data_list_bi,
+  data = data_list_uni,
   seed = 123,
   chains = 4,
-  iter_warmup = 1000,
+  iter_warmup = 2000,
   iter_sampling = 1000,
   parallel_chains = 4,
   max_treedepth = 11,
   refresh = 0 
 )
 fit_uni <- mod_uni$sample(
-  data = data_list_bi,
+  data = data_list_uni,
   seed = 123,
   chains = 4,
-  iter_warmup = 1000,
+  iter_warmup = 2000,
   iter_sampling = 1000,
   parallel_chains = 4,
   max_treedepth = 11,
   refresh = 0 
 )
 
-log_lik_1 <- loo::extract_log_lik(rstan::read_stan_csv(fit_uni$output_files()), 
-merge_chains = FALSE) 
-log_lik_2 <- loo::extract_log_lik(myfit2, merge_chains = FALSE)
+# Extract pointwise log-likelihood
+# using merge_chains=FALSE returns an array, which is easier to 
+# use with relative_eff()
+log_lik_1 <- extract_log_lik(rstan::read_stan_csv(fit_uni$output_files()), merge_chains = FALSE)
+r_eff <- relative_eff(exp(log_lik_1), cores = 2) 
+loo_1 <- loo(log_lik_1, r_eff = r_eff, cores = 2)
 
-loo1 <- loo::loo(fit_uni$draws(), save_psis = TRUE)
-loo2 <- loo::loo(fit_bi$draws(), save_psis = TRUE)
-loo::loo_compare(loo1, loo2)
+log_lik_2 <- extract_log_lik(rstan::read_stan_csv(fit_bi$output_files()), merge_chains = FALSE)
+r_eff <- relative_eff(exp(log_lik_2), cores = 2) 
+loo_2 <- loo(log_lik_2, r_eff = r_eff, cores = 2)
+loo::loo_compare(loo_1, loo_2)
+
+waic1 = waic(log_lik_1)
+waic2 = waic(log_lik_2)
+loo_compare(waic1, waic2)
