@@ -5,8 +5,8 @@ data {
   array[N] real Y;                       // y_2
   array[N] real X;                       // y_1
   cov_matrix[N_ids] A;                   // GRM matrix
-  vector[2] bets_prior_trait;
-  vector[2] bets_prior_slope;
+  vector[2] h2_prior_trait;
+  vector[2] h2_prior_slope;
 }
 transformed data{
   matrix[N_ids, N_ids] LA;
@@ -69,8 +69,8 @@ model {
     L_sigma ~ normal(0, 0.5);
 
     // variance partition priors
-    h2_beta ~ beta(bets_prior_slope[1], bets_prior_slope[2]);
-    h2 ~ beta(bets_prior_trait[1], bets_prior_trait[2]);
+    h2_beta ~ beta(h2_prior_slope[1], h2_prior_slope[2]);
+    h2 ~ beta(h2_prior_trait[1], h2_prior_trait[2]);
 
     // random effect precursors
     beta_tilde ~ std_normal();

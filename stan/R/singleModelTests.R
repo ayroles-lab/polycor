@@ -48,8 +48,8 @@ mod_uni <- cmdstan_model(here::here("stan/models/univariateRandomSlopes.stan"))
 #   array[N] real Y;                       // y_2
 #   array[N] real X;                       // y_1
 #   cov_matrix[N_ids] A;                   // GRM matrix
-#   vector[2] bets_prior_trait;
-#   vector[2] bets_prior_slope;
+#   vector[2] h2_prior_trait;
+#   vector[2] h2_prior_slope;
 # }
 data_list_uni = list(N = N, 
                      N_ids = N_id,
@@ -57,8 +57,8 @@ data_list_uni = list(N = N,
                      Y = y - mean(y),
                      X = x,
                      A = as.matrix(G),
-                     beta_prior_trait = c(1, 1),
-                     beta_prior_slope = c(2, 2))
+                     h2_prior_trait = c(1, 1),
+                     h2_prior_slope = c(2, 2))
 fit_uni <- mod_uni$sample(
   data = data_list_uni,
   seed = 123,
@@ -126,8 +126,8 @@ mod_bi <- cmdstan_model(here::here("stan/models/bivariateRandomSlopes.stan"))
 #   array[N] real Y;                       // y_2
 #   array[N] real X;                       // y_1
 #   cov_matrix[N_ids] A;                   // GRM matrix
-#   vector[2] bets_prior_trait;
-#   vector[2] bets_prior_slope;
+#   vector[2] h2_prior_trait;
+#   vector[2] h2_prior_slope;
 # }
 data_list_bi = list(N = N, 
                     N_ids = N_id,
@@ -135,8 +135,8 @@ data_list_bi = list(N = N,
                     Y = y - mean(y),
                     X = ((x - mean(x))/sd(x)),
                     A = as.matrix(G), 
-                    beta_prior_trait = c(1, 1),
-                    beta_prior_slope = c(2, 2))
+                    h2_prior_trait = c(1, 1),
+                    h2_prior_slope = c(2, 2))
 fit_bi <- mod_bi$sample(
   data = data_list_bi,
   seed = 123,
