@@ -3,5 +3,8 @@
     "spellright.documentTypes": [
         "latex",
         "plaintext"
-    ]
+    ],
+    "[r]": {
+        "editor.defaultFormatter": "REditorSupport.r-lsp"
+      }
 }

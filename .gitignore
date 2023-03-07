@@ -15,3 +15,5 @@ stan/models/univariate
 stan/models/bivariateRandomSlopes
 stan/models/univariateiidRandomSlopes
 stan/models/bivariateiidRandomSlopes
+Rplots.pdf
+stan/models/univariatePenalizedRandomSlopes

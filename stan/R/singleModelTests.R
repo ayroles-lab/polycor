@@ -2,7 +2,9 @@
 cmdstanr::check_cmdstan_toolchain(fix = TRUE, quiet = TRUE)
 cmdstanr::install_cmdstan()
 
-pak::pkg_install(c("rmcelreath/rethinking", "bayesplot", "posterior", "ggplot2", "cowplot", "patchwork", "loo", "tictoc"))
+
+
+pak::pkg_install(c("rmcelreath/rethinking", "bayesplot", "posterior", "ggplot2", "cowplot", "patchwork", "loo", "tictoc", "rio"))
 
 library(rethinking)
 library(cmdstanr)
@@ -13,6 +15,7 @@ library(bayesplot)
 library(patchwork)
 library(loo)
 library(tictoc)
+library(rio)
 color_scheme_set("brightblue")
 
 sim <- new.env()
@@ -82,19 +85,19 @@ a_blups = data.frame(
   GRM = colMeans(colMeans(fit_uniRandSlopes$draws("a"))), 
   iid = colMeans(colMeans(fit_uniRandSlopesiid$draws("a")))) 
 (corrs = cor(a_blups))
-# png("test.png", height = 500, width = 1000)
-# a_blups |> ggplot(aes(true, GRM)) + labs(x = "Simulated True Value", y = "Model Estimate") +
-#            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Breeding value BLUPs (GRM)") +
-# a_blups |> ggplot(aes(true, iid)) + labs(x = "Simulated True Value", y = "Model Estimate") +
-#            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Breeding value BLUPs (iid)") 
-# dev.off()
+png("test.png", height = 500, width = 1000)
+a_blups |> ggplot(aes(true, GRM)) + labs(x = "Simulated True Value", y = "Model Estimate") +
+           geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Breeding value BLUPs (GRM)") +
+a_blups |> ggplot(aes(true, iid)) + labs(x = "Simulated True Value", y = "Model Estimate") +
+           geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Breeding value BLUPs (iid)") 
+dev.off()
 
 slope_blups = data.frame(
   true = as.vector(beta.add), 
   GRM = colMeans(colMeans(fit_uniRandSlopes$draws("beta_add"))), 
   iid = colMeans(colMeans(fit_uniRandSlopesiid$draws("beta_add")))) 
 (corrs = cor(slope_blups))
-png("test.png", height = 1000, width = 1000)
+png("slopesGRM_iid.png", height = 1000, width = 1000)
 (mcmc_recover_hist(fit_uniRandSlopes$draws(c("sigma_y", "sigma_beta", "h2_y", "h2_beta")), 
                                            true = c(sigma_y, sigma_beta, h2_y, h2_beta)) + 
                                            ggtitle("GRM") +
@@ -134,7 +137,7 @@ sigma_y = 1
 h2_beta = 0.8
 sigma_beta = 1
 
-G = simulateKinship(N_id)
+G = sim$simulateKinship(N_id)
 
 rhog = 0.5
 
@@ -166,7 +169,7 @@ y = rep(y.add, each = N_rep) + rnorm(N, sd = sigma_y * sqrt(1-h2_y)) + beta * x
 data_list_bi = list(N = N, 
                     N_ids = N_id,
                     id = rep(1:N_id, each = N_rep),
-                    Y = y - mean(y),
+                    Y = y,
                     X = x,
                     A = as.matrix(G), 
                     h2_prior_trait = c(3, 4),
@@ -182,7 +185,7 @@ fit_biRandSlopes <- biRandSlopes$sample(
   adapt_delta = 0.9, max_treedepth = 12,
   refresh = 500 # print update every 500 iters
 )
-fit_biRandSlopes$summary(c("L_sigma", "h2", "h2_beta",  "rho"))
+fit_biRandSlopes$summary(c("L_sigma", "h2", "h2_beta",  "rho")) 
 png("test.png", height = 900, width = 1000)
 mcmc_recover_intervals(fit_biRandSlopes$draws(c("h2", "h2_beta",  "rho")), 
                                               true = c(h2_x, h2_y, h2_beta, rhog)) + 
@@ -190,15 +193,15 @@ mcmc_recover_intervals(fit_biRandSlopes$draws(c("h2", "h2_beta",  "rho")),
                                               ggtitle("GRM - Pleiotropic") + 
   plot_layout(guides = 'collect')
 dev.off()
-
+  
 png("test.png", height = 450, width = 1000)
-data.frame(estimate = colMeans(colMeans(fit_bi$draws("a"))), 
+data.frame(estimate = colMeans(colMeans(fit_biRandSlopes$draws("a"))), 
            true = c(as.vector(x.add), as.vector(y.add)),
            trait = rep(c("x", "y"), each = N_id)) |> 
            ggplot(aes(true, estimate, color = trait)) + 
            labs(x = "Simulated True Value", y = "Model Estimate") +
            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Breeding value BLUPs (g.add)") +
-data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))), 
+data.frame(estimate = colMeans(colMeans(fit_biRandSlopes$draws("beta_add"))), 
            true = as.vector(beta.add)) |> ggplot(aes(true, estimate)) + labs(x = "Simulated True Value", y = "Model Estimate") +
            geom_point() + geom_abline(intercept = 0, slope = 1) + theme_minimal() + ggtitle("Random Slope BLUPs (beta.add)")
 dev.off()
@@ -207,7 +210,9 @@ data.frame(estimate = colMeans(colMeans(fit_bi$draws("beta_add"))),
            true = as.vector(beta.add)) |> cor()
 
 
-fit_bi <- biRandSlopes$sample(
+x = list(
+function()
+fit_bi <<- biRandSlopes$sample(
   data = data_list_uni,
   seed = 123,
   chains = 4,
@@ -216,10 +221,9 @@ fit_bi <- biRandSlopes$sample(
   parallel_chains = 4,
   max_treedepth = 11,
   refresh = 0 
-)
-fit_bi$summary("rho")
-
-fit_bi_true <- biRandSlopes$sample(
+),
+function()
+fit_bi_true <<- biRandSlopes$sample(
   data = data_list_bi,
   seed = 123,
   chains = 4,
@@ -228,5 +232,10 @@ fit_bi_true <- biRandSlopes$sample(
   parallel_chains = 4,
   max_treedepth = 11,
   refresh = 0 
-)
-fit_bi_true$summary("rho")
+))
+library(doMC)
+library(parallel)
+registerDoMC(2)
+mclapply(x, function(x) x())
+fit_bi$summary("rho")      # no correlation 
+fit_bi_true$summary("rho") # correlation of 0.5
